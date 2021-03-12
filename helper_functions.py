@@ -155,7 +155,7 @@ def generate_output_table(word_table, phone_table):
 # In[7]:
 
 
-def generate_phone_wfst(f, start_state, phone, n, state_table, phone_table, log):
+def generate_phone_wfst(f, start_state, phone, n, state_table, phone_table, weight_fwd, weight_self):
     """
     Generate a WFST representing an n-state left-to-right phone HMM.
     
@@ -164,6 +164,8 @@ def generate_phone_wfst(f, start_state, phone, n, state_table, phone_table, log)
         start_state (int): the index of the first state, assumed to exist already
         phone (str): the phone label 
         n (int): number of states of the HMM
+        weight_fwd (int): weight value
+        weight_self (int): weight value of self node
         
     Returns:
         the final state of the FST
@@ -175,12 +177,8 @@ def generate_phone_wfst(f, start_state, phone, n, state_table, phone_table, log)
         
         in_label = state_table.find('{}_{}'.format(phone, i))
         
-        if (log):
-            sl_weight = fst.Weight('log', -math.log(0.1))  # weight for self-loop
-            next_weight = fst.Weight('log', -math.log(0.9))
-        else:
-            sl_weight = None
-            next_weight = None
+        sl_weight = None if weight_self==None else fst.Weight('log', -math.log(weight_self))  # weight for self-loop
+        next_weight = None if weight_fwd==None else fst.Weight('log', -math.log(weight_fwd)) # weight for forward
             
         # self-loop back to current state
         f.add_arc(current_state, fst.Arc(in_label, 0, sl_weight, current_state))
@@ -318,18 +316,19 @@ def generate_phone_sequence_recognition_wfst(n, state_table, phone_table):
 # In[14]:
 
 
-def generate_word_sequence_recognition_wfst(n, lex, original=False, log=True):
+def generate_word_sequence_recognition_wfst(n, lex, original=False, weight_fwd=None, weight_self=None):
     """ generate a HMM to recognise any single word sequence for words in the lexicon
     
     Args:
         n (int): states per phone HMM
         original (bool): True/False - origianl/optimized lexicon
-
+        weight_fwd (int): weight value
+        weight_self (int): weight value of self node
     Returns:
         the constructed WFST
     
     """
-    if (log):
+    if (weight_fwd!=None and weight_self!=None):
         f = fst.Fst('log')
         none_weight = fst.Weight('log', -math.log(1))
     else:
@@ -355,7 +354,7 @@ def generate_word_sequence_recognition_wfst(n, lex, original=False, log=True):
             current_state = initial_state
             
             for phone in phones:
-                current_state = generate_phone_wfst(f, current_state, phone, n, state_table, output_table, log)
+                current_state = generate_phone_wfst(f, current_state, phone, n, state_table, output_table, weight_fwd, weight_self)
         
             f.set_final(current_state)
             f.add_arc(current_state, fst.Arc(0, 0, none_weight, start_state))
