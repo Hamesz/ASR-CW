@@ -339,34 +339,87 @@ def generate_word_sequence_recognition_wfst(n, lex, original=False, weight_fwd=N
     else:
         f = fst.Fst()
         none_weight = None
-        
     lex = parse_lexicon(lex, original)
-    
     word_table, phone_table, state_table = generate_symbols_table(lex,3)
     output_table = generate_output_table(word_table, phone_table)
-#     print('output_table: {}'.format(list(output_table)))
-
     # create a single start state
     start_state = f.add_state()
     f.set_start(start_state)
-    
-    
-    
-    for word, phone_list in lex.items():
+    # make fst
+    for word, phone_list in lex.items():            
         for phones in phone_list:
             initial_state = f.add_state()
             f.add_arc(start_state, fst.Arc(0, output_table.find(word), none_weight, initial_state))
             current_state = initial_state
-            
             for phone in phones:
-                current_state = generate_phone_wfst(f, current_state, phone, n, state_table, output_table, weight_fwd, weight_self)
-        
+                current_state = generate_phone_wfst(f, current_state, phone, n, state_table, output_table, weight_fwd, weight_self)                
+            
             f.set_final(current_state)
             f.add_arc(current_state, fst.Arc(0, 0, none_weight, start_state))
         
     f.set_input_symbols(state_table)
     f.set_output_symbols(output_table)
     return f, word_table
+
+def generate_word_sequence_recognition_wfst_bigram(n, lex, original=False, weight_fwd=None, weight_self=None):
+    """ generate a HMM to recognise any single word sequence for words in the lexicon
+    
+    Args:
+        n (int): states per phone HMM
+        original (bool): True/False - origianl/optimized lexicon
+        weight_fwd (int): weight value
+        weight_self (int): weight value of self node
+    Returns:
+        the constructed WFST
+    
+    """
+    if (weight_fwd!=None and weight_self!=None):
+        f = fst.Fst('log')
+        none_weight = fst.Weight('log', -math.log(1))
+    else:
+        f = fst.Fst()
+        none_weight = None
+    lex = parse_lexicon(lex, original)
+    word_table, phone_table, state_table = generate_symbols_table(lex,3)
+    output_table = generate_output_table(word_table, phone_table)
+    # create a single start state
+    start_state = f.add_state()
+    f.set_start(start_state)
+    # -- dictionaries for initial and last states
+    dict_initial = {}
+    dict_final = {}
+    # make fst
+    for word, phone_list in lex.items():            
+        for phones in phone_list:
+            initial_state = f.add_state()
+            # -- add to initial dict
+            if word in dict_initial:
+                dict_initial[word].append(initial_state)
+            else:
+                dict_initial[word] = [initial_state]
+            # -- add arcs
+            f.add_arc(start_state, fst.Arc(0, output_table.find(word), none_weight, initial_state))
+            current_state = initial_state
+            for phone in phones:
+                current_state = generate_phone_wfst(f, current_state, phone, n, state_table, output_table, weight_fwd, weight_self)                
+            f.set_final(current_state)
+            f.add_arc(current_state, fst.Arc(0, 0, none_weight, start_state))
+            # -- add to final dict
+            if word in dict_final:
+                dict_final[word].append(current_state)
+            else:
+                dict_final[word] = [current_state]
+    # -- add bidirectional arcs 
+    for word, last_state_list in dict_final.items():                  # list of final states 4 word
+        for last_state in last_state_list:                            # final state from lsit
+            for word_bi, initial_state_list in dict_initial.items():  # list of initial satates
+                for initial_state in initial_state_list:              # state from list
+                    f.add_arc(last_state, fst.Arc(0, output_table.find(word_bi), none_weight, initial_state))
+        
+    f.set_input_symbols(state_table)
+    f.set_output_symbols(output_table)
+    return f, word_table
+
 
 
 def generate_word_sequence_recognition_wfst_test(n, lex, original=False, weight_fwd=None, weight_self=None):
@@ -393,28 +446,24 @@ def generate_word_sequence_recognition_wfst_test(n, lex, original=False, weight_
     word_table, phone_table, state_table = generate_symbols_table(lex,3)
     output_table = generate_output_table(word_table, phone_table)
 #     print('output_table: {}'.format(list(output_table)))
-
     # create a single start state
     start_state = f.add_state()
     f.set_start(start_state)
-    
-    
-    
+    # -- make fst
     for word, phone_list in lex.items():
         for phones in phone_list:
             initial_state = f.add_state()
             f.add_arc(start_state, fst.Arc(0, output_table.find(word), none_weight, initial_state))
             current_state = initial_state
-            
             for phone in phones:
                 current_state = generate_phone_wfst(f, current_state, phone, n, state_table, output_table, weight_fwd, weight_self)
-        
             f.set_final(current_state)
 #             f.add_arc(current_state, fst.Arc(0, 0, none_weight, start_state))
         
     f.set_input_symbols(state_table)
     f.set_output_symbols(output_table)
     return f, word_table
+
 
 def get_word_occurences(transcript_files):
     """ Gets the occurences of the words in the transcripts
