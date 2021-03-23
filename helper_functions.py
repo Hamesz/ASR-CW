@@ -361,7 +361,7 @@ def generate_word_sequence_recognition_wfst(n, lex, original=False, weight_fwd=N
     f.set_output_symbols(output_table)
     return f, word_table
 
-def generate_word_sequence_recognition_wfst_bigram(n, lex, original=False, weight_fwd=None, weight_self=None):
+def generate_word_sequence_recognition_wfst_bigram(n, lex, df_bigram_prob, original=False, weight_fwd=None, weight_self=None):
     """ generate a HMM to recognise any single word sequence for words in the lexicon
     
     Args:
@@ -414,7 +414,13 @@ def generate_word_sequence_recognition_wfst_bigram(n, lex, original=False, weigh
         for last_state in last_state_list:                            # final state from lsit
             for word_bi, initial_state_list in dict_initial.items():  # list of initial satates
                 for initial_state in initial_state_list:              # state from list
-                    f.add_arc(last_state, fst.Arc(0, output_table.find(word_bi), none_weight, initial_state))
+                    prob = df_bigram_prob['Word After',word_bi]['Word Before',word]
+                    if (prob==0):
+                        prob = 1e10
+                    else:
+                        prob = -math.log(prob)
+                    weight = fst.Weight('log',prob)
+                    f.add_arc(last_state, fst.Arc(0, output_table.find(word_bi), weight, initial_state))
         
     f.set_input_symbols(state_table)
     f.set_output_symbols(output_table)
@@ -815,96 +821,134 @@ def generate_WFST_silent(n, lex, weight_fwd, weight_self, original=False):
     f.set_output_symbols(output_table)
     return f, word_table 
 
-
-
-# class TrieNode: 
+class TrieNode: 
       
-#     # Trie node class 
-#     def __init__(self, phone, state): 
-#         self.children = []
-#         self.phone = phone
-#         self.state = state
+    # Trie node class 
+    def __init__(self, phone, state, f, state_table, output_table): 
+        self.children = []
+        self.phone = phone
+        self.start_state = f.add_state()
+        f.add_arc(state, fst.Arc(0, 0, None, self.start_state))
+        # --
+        self.generate_phone_seq(f, state_table, output_table)
         
-#     def add_child(self, trie_node):
-#         self.children.append(trie_node)
+    def set_final(self, f, output_table, word, start_state):
+        # add dummy state which outputs word
+        final_state = f.add_state()
+        # Add arc to output word which connects to end state
+        f.add_arc(self.end_state, fst.Arc(0, output_table.find(word), None, final_state))
+        f.set_final(final_state)
+        # add arc to start state
+        f.add_arc(final_state, fst.Arc(0, 0, None, start_state))
         
-#     def __eq__(self, val):
-#         return (val == self.phone)
+        
+        
+    def generate_phone_seq(self, f, state_table, output_table):
+        self.end_state = generate_phone_wfst(f, self.start_state, 
+                            self.phone, 3, state_table, 
+                            output_table, None, None)
+        
+    def add_child(self, trie_node):
+        self.children.append(trie_node)
+        
+    def __eq__(self, val):
+        return (val == self.phone)
     
-#     def __repr__(self):
-#         return self.phone
-        
+    def __repr__(self):
+        return self.phone
+
     
-# class Trie:
+class TrieRootNode(TrieNode):
+    """This is the root node which means it does not generate phone sequence
+    """
+    def __init__(self, phone, state, f, state_table, output_table): 
+        self.children = []
+        self.phone = phone
+        self.start_state = state
+        self.end_state = state
     
-#     def __init__(self, lex, f):
-#         self.root = self.getNode('') 
-#         self.lex = lex
+
+class Trie:
+    
+    def __init__(self, lex, original=True):
         
-#         lex = parse_lexicon(lex, original)
-#         self.word_table, self.phone_table, self.state_table = generate_symbols_table(self.lex,1)
-#         self.output_table = generate_output_table(self.word_table, self.phone_table)
+        self.lex = parse_lexicon(lex,False)
+        self.word_table, self.phone_table, self.state_table = generate_symbols_table(self.lex,3)
+        self.output_table = generate_output_table(self.word_table, self.phone_table)
         
-#         start_state = self.f.add_state()
-#         self.f.set_start(start_state)
+#         print(f"phone table: {list(self.phone_table)}")
+#         print(f"Output stable: {list(self.output_table)}")
+#         print(f"Word stable: {list(self.word_table)}")
+#         print(f"State Table: {list(self.state_table)}")
         
-#         for word in self.lex:
-#             self.insert(word)
+        self.f = fst.Fst()
+        
+        start_state = self.f.add_state()
+        self.f.set_start(start_state)
+        self.root = self.getNode('', start_state, root=True) 
+        
+        for word in self.lex:
+#             print(f"Word: {word}, phones: {self.lex[word]}")
+            self.insert(word)
+            
+        self.f.set_input_symbols(self.state_table)
+        self.f.set_output_symbols(self.output_table)
   
-#     def getNode(self, phone): 
-#         # Returns new trie node (initialized to NULLs) 
-#         return TrieNode(phone) 
+    def getNode(self, phone, state, root=False): 
+        # Returns new trie node (initialized to NULLs) 
+        if (root):
+            return TrieRootNode(phone, state, self.f, self.state_table, self.output_table) 
+        else:
+            return TrieNode(phone, state, self.f, self.state_table, self.output_table) 
     
     
-#     def insert(self,word):
-#         current_node = self.root
-#         current_phone = self.lex[word][0]
-#         self._insert(word, current_node, current_phone)
+    def insert(self,word):
+        current_node = self.root
+        for phones in self.lex[word]:
+            current_phone = phones[0]
+            self._insert(word, current_node, current_phone, phones, 0)
     
-#     def _insert(self, word, node, phone):
-#         # check if the current node is this phone
-#         found = False
-#         phones = self.lex[word]
-        
-#         for child_node in node.children: 
-#             if (child_node.phone == phone):
-#                 found = True
-#                 if (phone == phones[-1]):
-#                     self.f.set_final(node)
-#                     return node
-#                 else:
-#                     next_phone = phones[phones.index(phone) + 1]
-#                     next_node = self._insert(word, child_node, next_phone)
-#                     f.add_arc(node.state, fst.Arc(0, output_table.find(phone), None, next_node))
-                    
+    def _insert(self, word, node, phone, phones, phone_idx):
+        # check if the current node is this phone
+        found = False
+#         print(f"Checking node {node}, with phone {phone}")
+        for child_node in node.children: 
+            if (child_node.phone == phone):
+                found = True
+                if (phone_idx == len(phones) - 1):
+#                     self.f.set_final(node.state)
+                    return child_node
+                else:
+                    next_phone = phones[phone_idx + 1]
+#                     print(f"checking Node {child_node} to node {node}")
+                    next_node = self._insert(word, child_node, next_phone, phones, phone_idx + 1)
                     
                 
-#         # create the new phone node
-#         if (found == False):
-#             new_state = self.f.add_state()
-#             new_node = self.getNode(phone, new_state)
-#             node.add_child(new_node)
-            
-#             # if this is last phone then return
-#             if (phone == phones[-1]):
-#                 self.f.set_final(node)
-#                 return node
-#             else:
-#                 next_phone = phones[phones.index(phone) + 1]
-#                 next_node = self._insert(word, new_node, next_phone)
-#                 f.add_arc(node.state, fst.Arc(0, output_table.find(phone), None, next_node))
-
-#     def __repr__(self):
-#         node = self.root
-#         string = f"{node}"
-#         string = self._toString(string, node)
-#         return string
+        # create the new phone node
+        if (found == False):
+#             print(f"Phone {phone} not a child of this node {node}, so adding..")
+            new_node = self.getNode(phone, node.end_state)
+            node.add_child(new_node)
+#             print(f"Created new phone {phone} with start state: {new_node.start_state} and end state: {new_node.end_state}")
+            # if this is last phone then return
+            if (phone_idx == (len(phones) -1)):
+                new_node.set_final(self.f, self.output_table, word, self.root.start_state)
+                return new_node
+            else:
+                next_phone = phones[phone_idx + 1]
+                next_node = self._insert(word, new_node, next_phone, phones, phone_idx + 1)
+    
+    def __repr__(self):
+        node = self.root
+        string = f"{node}"
+        string = self._toString(string, node)
+        return string
         
-#     def _toString(self, string, node):
-#         string = f"{string} + {node.phone}"
-#         for child_node in node.children:
-#             string += self._toString(string, child_node)
-#         return string
+    def _toString(self, string, node):
+        string = f"{string} + {node.phone}"
+        for child_node in node.children:
+            string += self._toString(string, child_node)
+        return string
                 
         
 
